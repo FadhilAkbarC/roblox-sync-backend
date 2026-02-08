@@ -317,10 +317,7 @@ local function syncToBackend()
             CONFIG.BACKEND_URL .. 'api/sync',
             jsonPayload,
             Enum.HttpContentType.ApplicationJson,
-            false,
-            {
-                ["Content-Type"] = "application/json"
-            }
+            false
         )
         
         -- Parse response
