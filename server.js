@@ -16,31 +16,36 @@ const server = http.createServer(app);
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const PORT = process.env.PORT || 3001;
 const HOST = process.env.HOST || '0.0.0.0';
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(',') || ['*'];
+const FRONTEND_URL = process.env.FRONTEND_URL || '*';
 
-// CORS options to explicitly allow Content-Type and preflight OPTIONS
+// CORS options - More permissive for cross-domain
 const corsOptions = {
-    origin: ALLOWED_ORIGINS,
-    methods: ['GET', 'POST', 'OPTIONS'],
+    origin: function(origin, callback) {
+        // Allow all origins for now - more permissive
+        callback(null, true);
+    },
+    methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-    credentials: true
+    credentials: false,  // Changed to false for better cross-origin compatibility
+    maxAge: 86400  // 24 hours
 };
 
-// Socket.IO Configuration - Optimized for better reliability
+// Socket.IO Configuration - Optimized for fast connection
 const io = socketIO(server, {
     cors: {
-        origin: ALLOWED_ORIGINS,
+        origin: true,  // Accept all origins
         methods: ["GET", "POST", "OPTIONS"],
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-        credentials: true
+        credentials: false  // Changed to false for cross-origin
     },
-    // Reduce timeouts for faster fallback to polling
-    pingTimeout: 25000,      // 25 second ping timeout
-    pingInterval: 10000,     // 10 second ping interval
-    upgradeTimeout: 10000,   // 10 second upgrade timeout
-    maxHttpBufferSize: 1e6,  // 1MB max buffer
-    transports: ['websocket', 'polling'],
-    allowEIO3: true          // Allow Engine.IO v3 fallback
+    // Faster timeout configuration
+    pingTimeout: 10000,       // Reduced to 10s for faster detection
+    pingInterval: 5000,       // Reduced to 5s for quicker heartbeat
+    upgradeTimeout: 5000,     // Reduced to 5s for faster upgrade attempt
+    maxHttpBufferSize: 1e6,   // 1MB max buffer
+    transports: ['websocket', 'polling', 'webtransport'],
+    allowEIO3: true,          // Allow Engine.IO v3 fallback
+    serveClient: false,       // Don't serve Socket.IO client
+    connectTimeout: 5000      // 5 second connection timeout
 });
 
 // Middleware
@@ -48,16 +53,15 @@ app.use(cors(corsOptions));
 // Ensure preflight OPTIONS requests are handled for all routes
 app.options('*', cors(corsOptions));
 
-// Fallback CORS headers middleware (ensures Access-Control-Allow-Headers present)
+// Explicit CORS headers middleware
 app.use((req, res, next) => {
-    const origin = req.get('origin');
-    const allowedOrigin = ALLOWED_ORIGINS.includes('*') ? '*' : (ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.setHeader('Access-Control-Max-Age', '86400');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     
-    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-    res.setHeader('Access-Control-Allow-Methods', (corsOptions.methods || ['GET','POST','OPTIONS']).join(','));
-    res.setHeader('Access-Control-Allow-Headers', (corsOptions.allowedHeaders || ['Content-Type','Authorization','X-Requested-With']).join(','));
-    res.setHeader('Access-Control-Allow-Credentials', corsOptions.credentials ? 'true' : 'false');
-    
+    // Handle preflight
     if (req.method === 'OPTIONS') {
         return res.sendStatus(204);
     }
@@ -509,13 +513,14 @@ setInterval(() => {
 server.listen(PORT, HOST, () => {
     console.log('');
     console.log('========================================');
-    console.log('🚀 ROBLOX STUDIO SYNC SERVER v2.1.0');
+    console.log('🚀 ROBLOX STUDIO SYNC SERVER v2.2.0');
     console.log('========================================');
     console.log(`✓ Server running on port ${PORT}`);
     console.log(`✓ Host: ${HOST}`);
     console.log(`✓ Environment: ${NODE_ENV}`);
     console.log(`✓ WebSocket ready`);
-    console.log(`✓ CORS origins: ${ALLOWED_ORIGINS.join(', ')}`);
+    console.log(`✓ CORS: Enabled for all origins`);
+    console.log(`✓ Connection timeouts: 10s (optimal)`);
     console.log('');
     console.log('📡 HTTP Endpoints:');
     console.log(`  ├─ Health: http://localhost:${PORT}/health`);
