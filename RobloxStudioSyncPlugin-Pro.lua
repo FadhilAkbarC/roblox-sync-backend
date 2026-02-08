@@ -15,8 +15,8 @@ local CONFIG = {
     -- Backend URL (GANTI DENGAN URL RAILWAY ANDA!)
     BACKEND_URL = "https://roblox-sync-backend-production.up.railway.app/",
     
-    -- Sync interval in seconds
-    SYNC_INTERVAL = 2,
+    -- Sync interval in seconds (increased to reduce spam)
+    SYNC_INTERVAL = 10,
     
     -- Maximum hierarchy depth (prevent stack overflow)
     MAX_DEPTH = 20,
@@ -398,34 +398,8 @@ function startSync()
     
     coroutine.resume(syncThread)
     
-    -- Listen for changes (debounced)
-    local debounceTimer = nil
-    
-    game.DescendantAdded:Connect(function(descendant)
-        if not state.isSyncing then return end
-        
-        if debounceTimer then
-            debounceTimer:Disconnect()
-        end
-        
-        debounceTimer = delay(0.5, function()
-            log(string.format("Object added: %s", descendant.Name), "DEBUG")
-            syncToBackend()
-        end)
-    end)
-    
-    game.DescendantRemoving:Connect(function(descendant)
-        if not state.isSyncing then return end
-        
-        if debounceTimer then
-            debounceTimer:Disconnect()
-        end
-        
-        debounceTimer = delay(0.5, function()
-            log(string.format("Object removed: %s", descendant.Name), "DEBUG")
-            syncToBackend()
-        end)
-    end)
+    -- Event-based syncing disabled to reduce spam from folder open/close
+    -- Sync now happens only on the interval timer (SYNC_INTERVAL)
 end
 
 function stopSync()
