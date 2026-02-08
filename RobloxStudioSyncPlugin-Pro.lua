@@ -38,7 +38,10 @@ local state = {
     lastSyncTime = 0,
     syncCount = 0,
     errorCount = 0,
-    isPluginActive = false
+    isPluginActive = false,
+    lastSyncData = nil,
+    lastSyncHash = nil,
+    lastFullSyncTime = 0
 }
 
 -- ========================================
@@ -125,6 +128,78 @@ local function isScriptType(className)
     return className == "Script" 
         or className == "LocalScript" 
         or className == "ModuleScript"
+end
+
+-- ========================================
+-- HASH & DIFF FUNCTIONS
+-- ========================================
+
+local function hashData(data)
+    -- Simple hash function combining hierarchy and scripts
+    local function hashValue(v)
+        if type(v) == "string" then return v:sub(1, 10) end
+        if type(v) == "number" then return tostring(v) end
+        if type(v) == "table" then
+            local hash = ""
+            for k, val in pairs(v) do
+                hash = hash .. tostring(k) .. hashValue(val)
+            end
+            return hash:sub(1, 20)
+        end
+        return tostring(v)
+    end
+    
+    local hierarchyStr = HttpService:JSONEncode(data.hierarchy or {})
+    local scriptKeys = ""
+    for name in pairs(data.scripts or {}) do
+        scriptKeys = scriptKeys .. name
+    end
+    
+    -- Create a simple checksum
+    local checksum = 0
+    for i = 1, math.min(#hierarchyStr, 100) do
+        checksum = checksum + string.byte(hierarchyStr, i)
+    end
+    for i = 1, math.min(#scriptKeys, 50) do
+        checksum = checksum + string.byte(scriptKeys, i)
+    end
+    
+    return tostring(checksum)
+end
+
+local function detectChanges(oldData, newData)
+    if not oldData then return nil end
+    
+    local changes = {
+        hierarchyChanged = HttpService:JSONEncode(oldData.hierarchy or {}) ~= HttpService:JSONEncode(newData.hierarchy or {}),
+        scriptsChanged = false,
+        addedScripts = {},
+        removedScripts = {},
+        modifiedScripts = {}
+    }
+    
+    -- Detect script changes
+    local oldScripts = oldData.scripts or {}
+    local newScripts = newData.scripts or {}
+    
+    for name, source in pairs(newScripts) do
+        if not oldScripts[name] then
+            changes.addedScripts[name] = source
+            changes.scriptsChanged = true
+        elseif oldScripts[name] ~= source then
+            changes.modifiedScripts[name] = source
+            changes.scriptsChanged = true
+        end
+    end
+    
+    for name in pairs(oldScripts) do
+        if not newScripts[name] then
+            changes.removedScripts[name] = true
+            changes.scriptsChanged = true
+        end
+    end
+    
+    return changes
 end
 
 -- ========================================
@@ -309,8 +384,42 @@ local function syncToBackend()
             }
         }
         
+        -- Calculate hash of current data
+        local currentHash = hashData(payload)
+        
+        -- Detect changes from last sync
+        local isFirstSync = not state.lastSyncHash
+        local hasChanges = isFirstSync or (currentHash ~= state.lastSyncHash)
+        
+        if not hasChanges then
+            -- No changes detected, skip this sync
+            log("No changes detected. Skipping sync.", "DEBUG")
+            state.errorCount = 0
+            return true
+        end
+        
+        -- Determine sync type and prepare final payload
+        local finalPayload = {
+            timestamp = payload.timestamp,
+            metadata = payload.metadata,
+            isFullSync = isFirstSync,
+            hash = currentHash
+        }
+        
+        if isFirstSync then
+            -- First sync: send complete data
+            finalPayload.hierarchy = hierarchy
+            finalPayload.scripts = allScripts
+            log("First sync detected. Sending full data.", "DEBUG")
+        else
+            -- Subsequent sync: send only changes
+            local changes = detectChanges(state.lastSyncData, payload)
+            finalPayload.changes = changes
+            log("Changes detected. Sending delta.", "DEBUG")
+        end
+        
         -- Encode JSON
-        local jsonPayload = HttpService:JSONEncode(payload)
+        local jsonPayload = HttpService:JSONEncode(finalPayload)
         
         -- Send HTTP request to the sync endpoint
         local response = HttpService:PostAsync(
@@ -326,13 +435,16 @@ local function syncToBackend()
         if responseData.success then
             state.lastSyncTime = os.time()
             state.syncCount = state.syncCount + 1
+            state.lastSyncData = payload
+            state.lastSyncHash = currentHash
+            state.lastFullSyncTime = os.time()
             
             local elapsed = math.floor((tick() - startTime) * 1000)
+            local syncType = isFirstSync and "FULL" or "DELTA"
             
             log(string.format(
-                "Synced %d objects, %d scripts to %d clients in %dms",
-                objectCount,
-                scriptCount,
+                "[%s] Synced to %d clients in %dms",
+                syncType,
                 responseData.clientsNotified or 0,
                 elapsed
             ), "SUCCESS")

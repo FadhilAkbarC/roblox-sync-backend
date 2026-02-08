@@ -68,6 +68,7 @@ let currentGameData = {
     hierarchy: [],
     scripts: {},
     lastUpdate: null,
+    hash: null,
     metadata: {
         placeName: '',
         placeId: 0,
@@ -110,55 +111,117 @@ app.get('/health', (req, res) => {
 // Main Sync Endpoint (receives data from Roblox Plugin)
 app.post('/api/sync', (req, res) => {
     try {
-        const { hierarchy, scripts, timestamp, metadata } = req.body;
+        const { hierarchy, scripts, timestamp, metadata, isFullSync, changes, hash } = req.body;
         
-        // Validation
-        if (!hierarchy) {
-            return res.status(400).json({ 
-                error: 'Missing hierarchy data',
-                code: 'MISSING_HIERARCHY'
+        let updateBroadcast = null;
+        let syncType = 'UNKNOWN';
+        
+        if (isFullSync) {
+            // Full sync: replace entire state
+            syncType = 'FULL';
+            
+            if (!hierarchy) {
+                return res.status(400).json({ 
+                    error: 'Missing hierarchy data for full sync',
+                    code: 'MISSING_HIERARCHY'
+                });
+            }
+
+            // Count objects recursively
+            const countObjects = (nodes) => {
+                let count = 0;
+                for (const node of nodes) {
+                    count++;
+                    if (node.children) count += countObjects(node.children);
+                }
+                return count;
+            };
+
+            // Update game data with full state
+            currentGameData = {
+                hierarchy,
+                scripts: scripts || {},
+                lastUpdate: timestamp || Date.now(),
+                hash: hash,
+                metadata: {
+                    ...metadata,
+                    scriptCount: Object.keys(scripts || {}).length,
+                    objectCount: countObjects(hierarchy),
+                    clientCount: global.clients?.size || 0,
+                    lastSync: new Date().toISOString()
+                }
+            };
+            
+            // Broadcast full state for first sync
+            updateBroadcast = {
+                type: 'full',
+                ...currentGameData,
+                serverTime: Date.now()
+            };
+
+        } else if (changes) {
+            // Delta sync: apply only changes
+            syncType = 'DELTA';
+            
+            if (changes.hierarchyChanged && hierarchy) {
+                currentGameData.hierarchy = hierarchy;
+            }
+            
+            // Apply script changes
+            if (changes.scriptsChanged) {
+                // Add new scripts
+                for (const [name, source] of Object.entries(changes.addedScripts || {})) {
+                    currentGameData.scripts[name] = source;
+                }
+                
+                // Update modified scripts
+                for (const [name, source] of Object.entries(changes.modifiedScripts || {})) {
+                    currentGameData.scripts[name] = source;
+                }
+                
+                // Remove deleted scripts
+                for (const name of Object.keys(changes.removedScripts || {})) {
+                    delete currentGameData.scripts[name];
+                }
+            }
+            
+            // Update metadata and hash
+            currentGameData.lastUpdate = timestamp || Date.now();
+            currentGameData.hash = hash;
+            currentGameData.metadata = {
+                ...currentGameData.metadata,
+                ...metadata,
+                scriptCount: Object.keys(currentGameData.scripts).length,
+                lastSync: new Date().toISOString()
+            };
+            
+            // Broadcast only the delta to clients
+            updateBroadcast = {
+                type: 'delta',
+                changes,
+                metadata: currentGameData.metadata,
+                serverTime: Date.now()
+            };
+        } else {
+            return res.status(400).json({
+                error: 'Invalid sync payload',
+                code: 'INVALID_PAYLOAD'
             });
         }
-
-        // Count objects recursively
-        const countObjects = (nodes) => {
-            let count = 0;
-            for (const node of nodes) {
-                count++;
-                if (node.children) count += countObjects(node.children);
-            }
-            return count;
-        };
-
-        // Update game data
-        currentGameData = {
-            hierarchy,
-            scripts: scripts || {},
-            lastUpdate: timestamp || Date.now(),
-            metadata: {
-                ...metadata,
-                scriptCount: Object.keys(scripts || {}).length,
-                objectCount: countObjects(hierarchy),
-                clientCount: clients.size,
-                lastSync: new Date().toISOString()
-            }
-        };
 
         // Update statistics
         stats.totalSyncs++;
         stats.lastSync = new Date().toISOString();
 
-        // Broadcast to all connected clients
-        const updatePayload = {
-            ...currentGameData,
-            serverTime: Date.now()
-        };
-        
-        io.emit('game-update', updatePayload);
+        // Broadcast update to connected clients
+        io.emit('game-update', updateBroadcast);
 
         // Log sync
-        console.log(`[SYNC] ✓ Update received`);
-        console.log(`  ├─ Objects: ${currentGameData.metadata.objectCount}`);
+        console.log(`[SYNC] ✓ ${syncType} sync received`);
+        console.log(`  ├─ Type: ${syncType}`);
+        if (currentGameData.metadata.objectCount) {
+            console.log(`  ├─ Objects: ${currentGameData.metadata.objectCount}`);
+        }
         console.log(`  ├─ Scripts: ${currentGameData.metadata.scriptCount}`);
         console.log(`  └─ Clients notified: ${clients.size}`);
 
@@ -167,6 +230,7 @@ app.post('/api/sync', (req, res) => {
             success: true,
             clientsNotified: clients.size,
             timestamp: currentGameData.lastUpdate,
+            syncType,
             stats: {
                 objects: currentGameData.metadata.objectCount,
                 scripts: currentGameData.metadata.scriptCount
