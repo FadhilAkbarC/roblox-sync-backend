@@ -37,6 +37,18 @@ const io = socketIO(server, {
 app.use(cors(corsOptions));
 // Ensure preflight OPTIONS requests are handled for all routes
 app.options('*', cors(corsOptions));
+
+// Fallback CORS headers middleware (ensures Access-Control-Allow-Headers present)
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', corsOptions.origin || '*');
+    res.setHeader('Access-Control-Allow-Methods', (corsOptions.methods || ['GET','POST','OPTIONS']).join(','));
+    res.setHeader('Access-Control-Allow-Headers', (corsOptions.allowedHeaders || ['Content-Type','Authorization','X-Requested-With']).join(','));
+    res.setHeader('Access-Control-Allow-Credentials', corsOptions.credentials ? 'true' : 'false');
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(204);
+    }
+    next();
+});
 app.use(express.json({ limit: '50mb' }));  // Increased limit for large game data
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
