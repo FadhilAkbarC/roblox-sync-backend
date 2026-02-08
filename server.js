@@ -12,11 +12,20 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 
+// CORS options to explicitly allow Content-Type and preflight OPTIONS
+const corsOptions = {
+    origin: '*', // change to specific origin in production
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    credentials: true
+};
+
 // Socket.IO Configuration
 const io = socketIO(server, {
     cors: {
         origin: "*",  // Change to specific domain in production
-        methods: ["GET", "POST"],
+        methods: ["GET", "POST", "OPTIONS"],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
         credentials: true
     },
     pingTimeout: 60000,
@@ -25,7 +34,9 @@ const io = socketIO(server, {
 });
 
 // Middleware
-app.use(cors());
+app.use(cors(corsOptions));
+// Ensure preflight OPTIONS requests are handled for all routes
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));  // Increased limit for large game data
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
