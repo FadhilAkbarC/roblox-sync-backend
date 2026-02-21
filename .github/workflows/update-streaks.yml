@@ -2,11 +2,17 @@ name: Update Daily Streak Card
 
 on:
   schedule:
-    - cron: "15 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: write
+
+concurrency:
+  group: daily-streaks-update
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -25,23 +31,27 @@ jobs:
         env:
           STREAK_USERNAME: ${{ vars.STREAK_USERNAME }}
           STREAK_TIMEZONE_OFFSET: ${{ vars.STREAK_TIMEZONE_OFFSET }}
+          STREAK_MAX_PAGES: ${{ vars.STREAK_MAX_PAGES }}
+          STREAK_LOOKBACK_DAYS: ${{ vars.STREAK_LOOKBACK_DAYS }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Fail fast if username is not configured in repo variables.
+          # Stop early when username variable is missing.
           if [ -z "$STREAK_USERNAME" ]; then
             echo "Missing repository variable: STREAK_USERNAME"
             exit 1
           fi
 
-          # Render the SVG card from commit push events.
+          # Generate a fresh SVG from latest commit-log events.
           python3 src/dailystreaks.py \
             --username "$STREAK_USERNAME" \
             --timezone-offset "${STREAK_TIMEZONE_OFFSET:-0}" \
+            --max-pages "${STREAK_MAX_PAGES:-5}" \
+            --lookback-days "${STREAK_LOOKBACK_DAYS:-120}" \
             --output assets/github-streak.svg
 
       - name: Commit changes
         run: |
-          # Commit only when card content actually changed.
+          # Commit only when card content actually changes.
           if git diff --quiet assets/github-streak.svg; then
             echo "No changes detected"
             exit 0

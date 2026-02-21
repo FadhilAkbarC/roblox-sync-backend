@@ -3,12 +3,11 @@
 DailyStreaks adalah sistem ringan untuk menghasilkan kartu **GitHub commit streak** (SVG) yang bisa dipasang langsung di profile README.
 
 ## Fitur Utama
-- Sederhana: hanya 1 script Python standar library (tanpa dependency eksternal).
-- Efisien: ambil data event publik GitHub API dan hitung streak dari `PushEvent`.
-- Aman untuk GitHub Actions: pagination di-clamp otomatis agar tidak kena error API 422.
-- Otomatis: GitHub Actions jalan tiap jam + bisa manual (`workflow_dispatch`).
-- Mudah dikustomisasi: username & timezone disimpan di repository variables.
-- Struktur rapi: direktori jelas, file secukupnya, mudah di-maintain.
+- Sederhana: 1 script Python (stdlib-only, tanpa dependency eksternal).
+- Efisien: ambil event commit (`PushEvent`) dengan pagination aman + stop dini berbasis `lookback`.
+- Stabil: aman dari error pagination GitHub (`HTTP 422`), sehingga workflow tidak mudah gagal.
+- Cepat update: auto-run tiap 15 menit, manual trigger, dan trigger saat ada push ke branch `main` repo ini.
+- Mudah dikustomisasi: username, timezone, page-limit, dan lookback-days dari repository variables.
 
 ## Struktur Proyek
 
@@ -20,39 +19,35 @@ DailyStreaks adalah sistem ringan untuk menghasilkan kartu **GitHub commit strea
 └── src/dailystreaks.py                    # Engine hitung streak + render SVG
 ```
 
-## Cara Pakai Cepat
+## Konfigurasi Repository Variables
+Buka **Settings → Secrets and variables → Actions → Variables**:
+- `STREAK_USERNAME` (wajib): username GitHub target.
+- `STREAK_TIMEZONE_OFFSET` (opsional, default `0`): offset UTC jam (contoh `7` untuk WIB).
+- `STREAK_MAX_PAGES` (opsional, default `5`): jumlah halaman API, otomatis dibatasi ke `1..10`.
+- `STREAK_LOOKBACK_DAYS` (opsional, default `120`): jendela hari untuk early-stop agar lebih efisien.
 
-### 1) Konfigurasi repository variable
-Di repo ini, buka **Settings → Secrets and variables → Actions → Variables**:
-- `STREAK_USERNAME`: username GitHub yang ingin dihitung.
-- `STREAK_TIMEZONE_OFFSET`: offset UTC jam (contoh `7` untuk WIB). Opsional.
+> Workflow memakai `secrets.GITHUB_TOKEN` bawaan Actions.
 
-> Workflow menggunakan `secrets.GITHUB_TOKEN` bawaan Actions untuk rate-limit lebih baik.
-
-### 2) Jalankan workflow
-- Buka tab **Actions**.
-- Jalankan workflow `Update Daily Streak Card` secara manual sekali.
-- Setelah itu akan auto update tiap jam.
-
-### 3) Pasang di profile README GitHub
-Tambahkan ini di profile README (`<username>/<username>` repo):
+## Cara Pasang di Profile README GitHub
+Tambahkan markdown berikut ke repo profile `<username>/<username>` Anda:
 
 ```md
-![DailyStreaks](https://raw.githubusercontent.com/futurisme/DailyStreaks/work/assets/github-streak.svg)
+![DailyStreaks](https://raw.githubusercontent.com/futurisme/DailyStreaks/main/assets/github-streak.svg)
 ```
 
-> Jika default branch Anda bukan `work`, ganti segment branch di URL sesuai branch default.
-
 ## Jalankan Lokal
+Online mode:
 
 ```bash
 python3 src/dailystreaks.py \
   --username futurisme \
   --timezone-offset 7 \
+  --max-pages 5 \
+  --lookback-days 120 \
   --output assets/github-streak.svg
 ```
 
-Mode offline (pakai fixture):
+Offline mode (fixture):
 
 ```bash
 python3 src/dailystreaks.py \
@@ -61,14 +56,8 @@ python3 src/dailystreaks.py \
   --output assets/github-streak.svg
 ```
 
-## Catatan Desain
-- Perhitungan streak berbasis **hari yang memiliki commit** dari `PushEvent`.
-- `Current streak` aktif jika hari kontribusi terakhir adalah hari ini atau kemarin.
-- Jika tidak ada kontribusi > 1 hari, current streak menjadi `0`.
-- `Longest streak` dihitung dari rentang hari commit beruntun terpanjang.
-
-## Rencana Ekspansi (opsional)
-- Tema warna (light/dark/custom).
-- Filter repository tertentu.
-- Badges tambahan (best day, weekly streak, dsb).
-
+## Catatan Perilaku Streak
+- Perhitungan berdasarkan hari yang punya commit dari `PushEvent`.
+- `Current streak` aktif jika kontribusi terakhir ada di hari ini/kemarin.
+- Jika hari ini belum commit dan terakhir > 1 hari lalu, current streak = `0`.
+- Saat commit baru muncul di event feed GitHub, kartu akan ikut ter-update pada run berikutnya (maks. 15 menit, atau langsung saat push ke repo ini).
