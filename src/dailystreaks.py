@@ -340,7 +340,7 @@ def format_range(start: dt.date | None, end: dt.date | None) -> str:
 def render_svg(username: str, stats: StreakStats) -> str:
     """Build the final SVG card."""
 
-    return f"""<svg width=\"900\" height=\"220\" viewBox=\"0 0 900 220\" xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" aria-label=\"GitHub streak stats\">
+    return f"""<svg width=\"900\" height=\"220\" viewBox=\"0 0 900 220\" preserveAspectRatio=\"xMidYMid meet\" style=\"max-width:900px;width:100%;height:auto;\" xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" aria-label=\"GitHub streak stats\">
   <defs>
     <linearGradient id=\"bg\" x1=\"0\" x2=\"1\" y1=\"0\" y2=\"1\">
       <stop offset=\"0%\" stop-color=\"#0d1117\"/>
