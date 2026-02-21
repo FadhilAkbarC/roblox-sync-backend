@@ -358,11 +358,11 @@ def render_svg(username: str, stats: StreakStats) -> str:
 
   <text x=\"450\" y=\"88\" text-anchor=\"middle\" font-family=\"Segoe UI Emoji, Segoe UI Symbol\" font-size=\"34\" fill=\"#ffa657\">🔥</text>
   <text x=\"450\" y=\"118\" text-anchor=\"middle\" font-family=\"Segoe UI, Ubuntu, sans-serif\" font-weight=\"700\" font-size=\"54\" fill=\"#ffa657\">{stats.current_streak}</text>
-  <text x=\"450\" y=\"154\" text-anchor=\"middle\" font-family=\"Segoe UI, Ubuntu, sans-serif\" font-size=\"30\" fill=\"#ffa657\">Current Streak</text>
+  <text x=\"450\" y=\"154\" text-anchor=\"middle\" font-family=\"Segoe UI, Ubuntu, sans-serif\" font-size=\"30\" fill=\"#ffa657\">Current Streak (days)</text>
   <text x=\"450\" y=\"184\" text-anchor=\"middle\" font-family=\"Segoe UI, Ubuntu, sans-serif\" font-size=\"21\" fill=\"#8b949e\">{format_range(stats.current_start, stats.current_end)}</text>
 
   <text x=\"750\" y=\"98\" text-anchor=\"middle\" font-family=\"Segoe UI, Ubuntu, sans-serif\" font-weight=\"700\" font-size=\"52\" fill=\"#c9d1d9\">{stats.longest_streak}</text>
-  <text x=\"750\" y=\"135\" text-anchor=\"middle\" font-family=\"Segoe UI, Ubuntu, sans-serif\" font-size=\"28\" fill=\"#8b949e\">Longest Streak</text>
+  <text x=\"750\" y=\"135\" text-anchor=\"middle\" font-family=\"Segoe UI, Ubuntu, sans-serif\" font-size=\"28\" fill=\"#8b949e\">Longest Streak (days)</text>
   <text x=\"750\" y=\"170\" text-anchor=\"middle\" font-family=\"Segoe UI, Ubuntu, sans-serif\" font-size=\"21\" fill=\"#8b949e\">{format_range(stats.longest_start, stats.longest_end)}</text>
 </svg>
 """

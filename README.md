@@ -1,42 +1,25 @@
-# DailyStreaks (Simple, Fast, Auto-Update)
+# DailyStreaks
 
-DailyStreaks adalah sistem ringan untuk menghasilkan kartu **GitHub streak** (SVG) dan memasangnya di profile README.
+DailyStreaks adalah generator kartu streak GitHub (SVG) yang ringan, rapi, dan otomatis update untuk dipasang di profile README.
 
-## Update Utama (Agar Tidak Mulai dari 0)
-Sekarang streak **tidak mulai dari nol** untuk akun lama:
-- Sistem mengambil baseline histori kontribusi sejak **tanggal profile dibuat** (account `created_at`) via GitHub GraphQL contribution calendar.
-- Lalu baseline itu di-overlay dengan **push event terbaru** supaya update hari ini lebih cepat terdeteksi.
-- Hasilnya: histori lama kebaca, dan commit/push baru bisa masuk tampilan lebih cepat.
+## Apa yang sudah diperbaiki
+- **Current streak dihitung dari histori penuh akun** (mulai dari tanggal profile dibuat), jadi tidak “reset dari 0” untuk akun lama.
+- Jika kontribusi harian tersambung tanpa putus sampai hari ini/terakhir, maka itulah nilai current streak (contoh 48 hari => tampil 48).
+- Data histori dibaca dari contribution calendar (GraphQL), lalu di-overlay dengan push event terbaru agar update hari ini lebih cepat terdeteksi.
+- Tampilan SVG dibuat lebih adaptif untuk container GitHub (mobile/desktop) dengan `viewBox` + `max-width` responsif.
 
-## Kenapa URL `.../work/assets/github-streak.svg` bisa gagal?
-Penyebab umum:
-1. Workflow update berjalan di `main`, tapi URL menunjuk `work`.
-2. Branch URL tidak berisi file SVG terbaru.
-
-Gunakan URL canonical ini:
+## URL gambar yang disarankan
+Gunakan branch yang benar-benar menerima update workflow.
 
 ```text
 https://raw.githubusercontent.com/futurisme/DailyStreaks/main/assets/github-streak.svg
 ```
 
-Jika ingin pakai `work`, pastikan branch `work` juga menerima update workflow/commit.
+Jika ingin pakai `work`, pastikan branch `work` juga dipush dan workflow aktif di branch itu.
 
 ---
 
-## Fitur Utama
-- Ringan: 1 script Python stdlib-only.
-- Canggih tapi efisien:
-  - histori kontribusi dari profile creation date,
-  - fetch recent push events untuk percepat deteksi hari ini,
-  - pagination aman (`1..10`) + graceful 422 handling.
-- Auto update cepat:
-  - schedule tiap 5 menit,
-  - manual trigger,
-  - trigger saat ada push ke `main`/`work`.
-- Commit hanya saat SVG berubah (hemat CI run & rapi).
-
-## Struktur Proyek
-
+## Struktur direktori
 ```text
 .
 ├── .github/workflows/update-streaks.yml
@@ -45,43 +28,41 @@ Jika ingin pakai `work`, pastikan branch `work` juga menerima update workflow/co
 └── src/dailystreaks.py
 ```
 
+Struktur ini sudah dijaga tetap kecil supaya sustainable dan mudah dikembangkan.
+
 ---
 
-## Setup Detail (Variables + Secrets)
+## Setup (step-by-step)
 
 ### 1) Variables
-Settings → Secrets and variables → Actions → **Variables**
+Buka: **Settings → Secrets and variables → Actions → Variables**
 
 Wajib:
-- `STREAK_USERNAME` → username GitHub target (contoh: `futurisme`)
+- `STREAK_USERNAME` = username GitHub target (contoh `futurisme`)
 
 Opsional:
-- `STREAK_TIMEZONE_OFFSET` (default `0`) → contoh `7` (WIB)
+- `STREAK_TIMEZONE_OFFSET` (default `0`) — contoh `7` untuk WIB
 - `STREAK_MAX_PAGES` (default `5`, dibatasi `1..10`)
-- `STREAK_LOOKBACK_DAYS` (default `45`) untuk push-event lookback cepat
+- `STREAK_LOOKBACK_DAYS` (default `45`) untuk percepat deteksi push terbaru
 
 ### 2) Secrets
-Settings → Secrets and variables → Actions → **Secrets**
+Buka: **Settings → Secrets and variables → Actions → Secrets**
 
-Untuk mode default, Anda **tidak wajib** membuat secret tambahan.
-Workflow memakai `secrets.GITHUB_TOKEN` bawaan GitHub Actions.
+Default-nya tidak perlu secret tambahan karena workflow memakai `secrets.GITHUB_TOKEN` bawaan Actions.
 
-Opsional (hanya jika perlu token custom):
-- `GH_PAT` (fine-grained PAT)
+### 3) Permissions workflow
+Buka: **Settings → Actions → General → Workflow permissions**
+- pilih **Read and write permissions**
 
-### 3) Workflow Permission (WAJIB)
-Settings → Actions → General → Workflow permissions:
-- Pilih **Read and write permissions**
+Ini penting agar bot Actions bisa commit perubahan `assets/github-streak.svg`.
 
-Agar `github-actions[bot]` bisa commit `assets/github-streak.svg`.
+### 4) Jalankan workflow pertama
+- Buka tab **Actions**
+- Pilih **Update Daily Streak Card**
+- Klik **Run workflow**
 
-### 4) Jalankan Pertama Kali
-- Buka tab Actions
-- Pilih `Update Daily Streak Card`
-- Klik `Run workflow`
-
-### 5) Pasang di Profile README
-Tambahkan:
+### 5) Pasang ke profile README
+Di repo profile (`<username>/<username>`), tambahkan:
 
 ```md
 ![DailyStreaks](https://raw.githubusercontent.com/futurisme/DailyStreaks/main/assets/github-streak.svg)
@@ -89,13 +70,16 @@ Tambahkan:
 
 ---
 
-## Catatan Perilaku Streak
-- `Current streak` aktif jika kontribusi terakhir ada di hari ini/kemarin.
-- Jika hari ini belum ada kontribusi dan terakhir > 1 hari lalu, current streak jadi `0`.
-- Jika baru push/commit dan belum muncul di contribution calendar, overlay recent push event membantu percepatan update.
+## Cara kerja singkat
+1. Ambil tanggal profile dibuat (`created_at`).
+2. Ambil contribution calendar dari tanggal itu sampai hari ini (per chunk tahunan).
+3. Ambil push event terbaru (REST) untuk percepat update hari ini.
+4. Merge aman (`max`) lalu hitung `current streak` + `longest streak`.
 
-## Jalankan Lokal
-Online mode:
+---
+
+## Jalankan lokal
+Online:
 
 ```bash
 python3 src/dailystreaks.py \
@@ -106,7 +90,7 @@ python3 src/dailystreaks.py \
   --output assets/github-streak.svg
 ```
 
-Offline mode (fixture):
+Offline (fixture):
 
 ```bash
 python3 src/dailystreaks.py \
