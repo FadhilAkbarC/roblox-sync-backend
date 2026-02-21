@@ -1,25 +1,19 @@
 # DailyStreaks
 
-DailyStreaks adalah generator kartu streak GitHub (SVG) yang ringan, rapi, dan otomatis update untuk dipasang di profile README.
+DailyStreaks is a lightweight GitHub streak card generator (SVG) for profile READMEs.
 
-## Apa yang sudah diperbaiki
-- **Current streak dihitung dari histori penuh akun** (mulai dari tanggal profile dibuat), jadi tidak “reset dari 0” untuk akun lama.
-- Jika kontribusi harian tersambung tanpa putus sampai hari ini/terakhir, maka itulah nilai current streak (contoh 48 hari => tampil 48).
-- Data histori dibaca dari contribution calendar (GraphQL), lalu di-overlay dengan push event terbaru agar update hari ini lebih cepat terdeteksi.
-- Tampilan SVG dibuat lebih adaptif untuk container GitHub (mobile/desktop) dengan `viewBox` + `max-width` responsif.
+It computes streaks from full account history (starting at account creation date), then overlays recent push events so same-day activity appears faster.
 
-## URL gambar yang disarankan
-Gunakan branch yang benar-benar menerima update workflow.
+## Recommended image URL
+
+Use the branch that your workflow actively updates:
 
 ```text
 https://raw.githubusercontent.com/futurisme/DailyStreaks/main/assets/github-streak.svg
 ```
 
-Jika ingin pakai `work`, pastikan branch `work` juga dipush dan workflow aktif di branch itu.
+## Project structure
 
----
-
-## Struktur direktori
 ```text
 .
 ├── .github/workflows/update-streaks.yml
@@ -28,58 +22,43 @@ Jika ingin pakai `work`, pastikan branch `work` juga dipush dan workflow aktif d
 └── src/dailystreaks.py
 ```
 
-Struktur ini sudah dijaga tetap kecil supaya sustainable dan mudah dikembangkan.
+## Setup
 
----
+### 1) Repository variables
+Path: **Settings → Secrets and variables → Actions → Variables**
 
-## Setup (step-by-step)
+Required:
+- `STREAK_USERNAME` (target GitHub username)
 
-### 1) Variables
-Buka: **Settings → Secrets and variables → Actions → Variables**
+Optional:
+- `STREAK_TIMEZONE_OFFSET` (default: `0`)
+- `STREAK_MAX_PAGES` (default: `5`, clamped to `1..10`)
+- `STREAK_LOOKBACK_DAYS` (default: `45`)
 
-Wajib:
-- `STREAK_USERNAME` = username GitHub target (contoh `futurisme`)
+### 2) Repository secrets
+Path: **Settings → Secrets and variables → Actions → Secrets**
 
-Opsional:
-- `STREAK_TIMEZONE_OFFSET` (default `0`) — contoh `7` untuk WIB
-- `STREAK_MAX_PAGES` (default `5`, dibatasi `1..10`)
-- `STREAK_LOOKBACK_DAYS` (default `45`) untuk percepat deteksi push terbaru
+No extra secret is required for default usage. The workflow uses `secrets.GITHUB_TOKEN`.
 
-### 2) Secrets
-Buka: **Settings → Secrets and variables → Actions → Secrets**
+### 3) Workflow permissions
+Path: **Settings → Actions → General → Workflow permissions**
 
-Default-nya tidak perlu secret tambahan karena workflow memakai `secrets.GITHUB_TOKEN` bawaan Actions.
+Set to **Read and write permissions** so `github-actions[bot]` can commit `assets/github-streak.svg`.
 
-### 3) Permissions workflow
-Buka: **Settings → Actions → General → Workflow permissions**
-- pilih **Read and write permissions**
+### 4) First run
+- Open **Actions**
+- Select **Update Daily Streak Card**
+- Click **Run workflow**
 
-Ini penting agar bot Actions bisa commit perubahan `assets/github-streak.svg`.
-
-### 4) Jalankan workflow pertama
-- Buka tab **Actions**
-- Pilih **Update Daily Streak Card**
-- Klik **Run workflow**
-
-### 5) Pasang ke profile README
-Di repo profile (`<username>/<username>`), tambahkan:
+### 5) Embed in profile README
 
 ```md
 ![DailyStreaks](https://raw.githubusercontent.com/futurisme/DailyStreaks/main/assets/github-streak.svg)
 ```
 
----
+## Local usage
 
-## Cara kerja singkat
-1. Ambil tanggal profile dibuat (`created_at`).
-2. Ambil contribution calendar dari tanggal itu sampai hari ini (per chunk tahunan).
-3. Ambil push event terbaru (REST) untuk percepat update hari ini.
-4. Merge aman (`max`) lalu hitung `current streak` + `longest streak`.
-
----
-
-## Jalankan lokal
-Online:
+Online mode:
 
 ```bash
 python3 src/dailystreaks.py \
@@ -90,7 +69,7 @@ python3 src/dailystreaks.py \
   --output assets/github-streak.svg
 ```
 
-Offline (fixture):
+Offline mode:
 
 ```bash
 python3 src/dailystreaks.py \

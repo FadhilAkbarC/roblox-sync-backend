@@ -15,14 +15,14 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List
 
 
-# Keep API endpoints centralized for clean maintenance.
+# Centralized API endpoints keep URL changes in one place.
 GITHUB_API = "https://api.github.com"
 GITHUB_GRAPHQL = "https://api.github.com/graphql"
 
 
 @dataclass
 class StreakStats:
-    """Container for values displayed in the streak SVG card."""
+    """Summary values displayed in the generated SVG card."""
 
     total_contributions: int
     current_streak: int
@@ -34,19 +34,20 @@ class StreakStats:
 
 
 def build_headers(token: str | None) -> Dict[str, str]:
-    """Build stable request headers."""
+    """Build consistent headers for every GitHub request."""
 
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "DailyStreaks-Bot",
     }
+    # Token is optional, but recommended for higher rate limits.
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
 
 def parse_next_url(link_header: str | None) -> str | None:
-    """Extract rel=next link from GitHub Link header."""
+    """Extract rel=next URL from GitHub Link header."""
 
     if not link_header:
         return None
@@ -63,7 +64,7 @@ def parse_next_url(link_header: str | None) -> str | None:
 
 
 def github_get_json(url: str, token: str | None) -> dict | list:
-    """GET JSON helper with normalized error handling."""
+    """Small GET helper with normalized network/error handling."""
 
     request = urllib.request.Request(url, headers=build_headers(token))
     try:
@@ -77,7 +78,7 @@ def github_get_json(url: str, token: str | None) -> dict | list:
 
 
 def github_graphql(query: str, variables: dict, token: str | None) -> dict:
-    """POST GraphQL helper for historical contribution calendar."""
+    """POST GraphQL helper used for long-range contribution history."""
 
     body = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     headers = build_headers(token)
@@ -100,7 +101,7 @@ def github_graphql(query: str, variables: dict, token: str | None) -> dict:
 
 
 def fetch_user_created_date(username: str, token: str | None) -> dt.date:
-    """Get user account creation date (start bound for full history)."""
+    """Get account creation date to define the true streak baseline."""
 
     payload = github_get_json(f"{GITHUB_API}/users/{username}", token)
     created_at = payload.get("created_at")
@@ -115,9 +116,9 @@ def fetch_historical_contribution_days(
     start_date: dt.date,
     end_date: dt.date,
 ) -> Dict[dt.date, int]:
-    """Fetch contribution days from account creation date until today (yearly chunks)."""
+    """Fetch daily contribution counts from account creation until today."""
 
-    # GraphQL contributionCollection works best in <= 1-year windows.
+    # GitHub contributionCollection is safest in ~1-year slices.
     query = """
     query($login: String!, $from: DateTime!, $to: DateTime!) {
       user(login: $login) {
@@ -152,6 +153,7 @@ def fetch_historical_contribution_days(
         calendar = collection.get("contributionCalendar") or {}
         weeks = calendar.get("weeks") or []
 
+        # Flatten nested weeks/day nodes into a simple date->count map.
         for week in weeks:
             for day in week.get("contributionDays", []):
                 day_date = dt.date.fromisoformat(day["date"])
@@ -169,8 +171,9 @@ def fetch_recent_push_events(
     max_pages: int = 5,
     lookback_days: int = 45,
 ) -> List[dict]:
-    """Fetch recent public events to capture latest push commits quickly."""
+    """Fetch recent public events so same-day pushes appear quickly."""
 
+    # Hard bounds prevent accidental over-fetching and API abuse.
     max_pages = max(1, min(max_pages, 10))
     lookback_days = max(1, lookback_days)
 
@@ -190,7 +193,7 @@ def fetch_recent_push_events(
                 link_header = response.headers.get("Link")
         except urllib.error.HTTPError as exc:
             msg = exc.read().decode("utf-8", errors="ignore")
-            # Gracefully stop when pagination boundary is reached.
+            # Endpoint may return 422 when pagination depth limit is hit.
             if exc.code == 422 and "pagination is limited" in msg.lower():
                 break
             raise RuntimeError(f"GitHub API error {exc.code}: {msg}") from exc
@@ -204,6 +207,7 @@ def fetch_recent_push_events(
         events.extend(payload)
         next_url = parse_next_url(link_header)
 
+        # Early-stop once a page is older than configured lookback window.
         oldest = None
         for event in payload:
             created_at = event.get("created_at")
@@ -218,19 +222,25 @@ def fetch_recent_push_events(
 
 
 def aggregate_push_commits_by_day(events: Iterable[dict], timezone: dt.timezone) -> Dict[dt.date, int]:
-    """Aggregate commit counts from PushEvent payloads by local date."""
+    """Aggregate PushEvent commit counts by local date."""
 
     push_counts: Dict[dt.date, int] = {}
 
     for event in events:
+        # We only use push events to represent commit-log activity.
         if event.get("type") != "PushEvent":
             continue
+
+        # Count commits attached to this push payload.
         commit_count = len(event.get("payload", {}).get("commits", []))
         if commit_count <= 0:
             continue
+
         created_at = event.get("created_at")
         if not created_at:
             continue
+
+        # Convert timestamp into requested local day boundary.
         timestamp = dt.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
         local_day = timestamp.astimezone(timezone).date()
         push_counts[local_day] = push_counts.get(local_day, 0) + commit_count
@@ -242,11 +252,11 @@ def merge_historical_with_recent(
     historical_days: Dict[dt.date, int],
     recent_push_days: Dict[dt.date, int],
 ) -> Dict[dt.date, int]:
-    """Merge stable history with recent push signals for fresher same-day updates."""
+    """Merge stable history with recent pushes for fresher same-day values."""
 
     merged = dict(historical_days)
 
-    # We only patch using max() to avoid over-counting on delayed calendar refreshes.
+    # Use max() to avoid inflating counts while still patching fresh days.
     for day, push_count in recent_push_days.items():
         merged[day] = max(merged.get(day, 0), push_count)
 
@@ -254,8 +264,9 @@ def merge_historical_with_recent(
 
 
 def compute_streaks(contributions_by_day: Dict[dt.date, int], today: dt.date) -> StreakStats:
-    """Compute total, current streak, and longest streak from daily contributions."""
+    """Compute current + longest streak from continuous active-day runs."""
 
+    # Only days with at least one contribution participate in streaks.
     active_days = sorted(day for day, count in contributions_by_day.items() if count > 0)
     if not active_days:
         return StreakStats(0, 0, 0, None, None, None, None)
@@ -269,6 +280,7 @@ def compute_streaks(contributions_by_day: Dict[dt.date, int], today: dt.date) ->
     run_start = active_days[0]
     prev = active_days[0]
 
+    # Walk every active day and split runs when there is a gap.
     for day in active_days[1:]:
         if (day - prev).days == 1:
             prev = day
@@ -283,6 +295,7 @@ def compute_streaks(contributions_by_day: Dict[dt.date, int], today: dt.date) ->
         run_start = day
         prev = day
 
+    # Final run check after loop completion.
     run_len = (prev - run_start).days + 1
     if run_len > longest_len:
         longest_len = run_len
@@ -290,6 +303,8 @@ def compute_streaks(contributions_by_day: Dict[dt.date, int], today: dt.date) ->
         longest_end = prev
 
     latest = active_days[-1]
+
+    # Current streak is considered alive when latest activity is today or yesterday.
     if (today - latest).days > 1:
         current_len = 0
         current_start = None
@@ -298,6 +313,8 @@ def compute_streaks(contributions_by_day: Dict[dt.date, int], today: dt.date) ->
         current_end = latest
         current_start = latest
         active_set = set(active_days)
+
+        # Extend backward while days are contiguous.
         while current_start - dt.timedelta(days=1) in active_set:
             current_start -= dt.timedelta(days=1)
         current_len = (current_end - current_start).days + 1
@@ -326,7 +343,7 @@ def short_day_fmt(day: dt.date) -> str:
 
 
 def format_range(start: dt.date | None, end: dt.date | None) -> str:
-    """Render compact card range labels."""
+    """Render a compact date-range label for the card."""
 
     if not start or not end:
         return "No active streak"
@@ -338,7 +355,7 @@ def format_range(start: dt.date | None, end: dt.date | None) -> str:
 
 
 def render_svg(username: str, stats: StreakStats) -> str:
-    """Build the final SVG card."""
+    """Build the SVG card that is embedded in profile README files."""
 
     return f"""<svg width=\"900\" height=\"220\" viewBox=\"0 0 900 220\" preserveAspectRatio=\"xMidYMid meet\" style=\"max-width:900px;width:100%;height:auto;\" xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" aria-label=\"GitHub streak stats\">
   <defs>
@@ -375,7 +392,7 @@ def parse_timezone(offset_hours: int) -> dt.timezone:
 
 
 def main() -> int:
-    """CLI entrypoint for local use and GitHub Actions."""
+    """CLI entrypoint used by local runs and GitHub Actions."""
 
     parser = argparse.ArgumentParser(description="Generate GitHub daily streak SVG")
     parser.add_argument("--username", required=True, help="GitHub username")
@@ -390,7 +407,7 @@ def main() -> int:
     timezone = parse_timezone(args.timezone_offset)
     today = dt.datetime.now(timezone).date()
 
-    # Offline mode uses only fixture push events.
+    # Offline mode is for deterministic local testing using a fixture file.
     if args.events_file:
         with open(args.events_file, "r", encoding="utf-8") as fh:
             events = json.load(fh)
@@ -398,7 +415,7 @@ def main() -> int:
         recent_push_days = aggregate_push_commits_by_day(events, timezone)
         merged_days = merge_historical_with_recent(historical_days, recent_push_days)
     else:
-        # Online mode starts from account creation date for full-history streak baseline.
+        # Online mode builds full-history baseline from account creation date.
         profile_created = fetch_user_created_date(args.username, args.token)
         historical_days = fetch_historical_contribution_days(
             username=args.username,
@@ -407,7 +424,7 @@ def main() -> int:
             end_date=today,
         )
 
-        # Overlay recent pushes so streak can update faster for newest activity.
+        # Overlay recent pushes for faster same-day visibility.
         recent_events = fetch_recent_push_events(
             username=args.username,
             token=args.token,
@@ -425,6 +442,7 @@ def main() -> int:
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(svg)
 
+    # JSON output is convenient for workflow logs/debugging.
     print(
         json.dumps(
             {
