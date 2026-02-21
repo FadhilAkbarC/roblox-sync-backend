@@ -5,6 +5,7 @@ DailyStreaks adalah sistem ringan untuk menghasilkan kartu **GitHub commit strea
 ## Fitur Utama
 - Sederhana: hanya 1 script Python standar library (tanpa dependency eksternal).
 - Efisien: ambil data event publik GitHub API dan hitung streak dari `PushEvent`.
+- Aman untuk GitHub Actions: pagination di-clamp otomatis agar tidak kena error API 422.
 - Otomatis: GitHub Actions jalan tiap jam + bisa manual (`workflow_dispatch`).
 - Mudah dikustomisasi: username & timezone disimpan di repository variables.
 - Struktur rapi: direktori jelas, file secukupnya, mudah di-maintain.

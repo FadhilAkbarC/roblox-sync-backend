@@ -12,7 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List
 
 
 # Keep the API endpoint in one place to simplify future extensions.
@@ -37,6 +37,9 @@ def fetch_events(username: str, token: str | None, max_pages: int = 5) -> List[d
 
     events: List[dict] = []
 
+    # GitHub caps pagination depth for this endpoint, so clamp to safe bounds.
+    max_pages = max(1, min(max_pages, 10))
+
     # Iterate page by page to gather enough history for streak detection.
     for page in range(1, max_pages + 1):
         params = urllib.parse.urlencode({"per_page": 100, "page": page})
@@ -57,6 +60,12 @@ def fetch_events(username: str, token: str | None, max_pages: int = 5) -> List[d
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             msg = exc.read().decode("utf-8", errors="ignore")
+
+            # API can return 422 when page depth exceeds endpoint pagination cap.
+            # Treat this as "no more pages" so workflow stays stable.
+            if exc.code == 422 and "pagination is limited" in msg.lower():
+                break
+
             raise RuntimeError(f"GitHub API error {exc.code}: {msg}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Network error: {exc}") from exc
@@ -217,7 +226,7 @@ def main() -> int:
     parser.add_argument("--username", required=True, help="GitHub username")
     parser.add_argument("--token", default=os.getenv("GITHUB_TOKEN"), help="GitHub API token")
     parser.add_argument("--timezone-offset", type=int, default=0, help="UTC offset in hours")
-    parser.add_argument("--max-pages", type=int, default=5, help="Max API pages to fetch")
+    parser.add_argument("--max-pages", type=int, default=5, help="Max API pages to fetch (1-10)")
     parser.add_argument("--output", default="assets/github-streak.svg", help="Output SVG path")
     parser.add_argument("--events-file", help="Optional local JSON file for offline testing")
     args = parser.parse_args()
