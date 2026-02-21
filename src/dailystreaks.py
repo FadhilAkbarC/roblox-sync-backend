@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a lightweight GitHub daily streak SVG from commit events."""
+"""Generate a lightweight GitHub daily streak SVG from historical + recent activity."""
 
 from __future__ import annotations
 
@@ -15,13 +15,14 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List
 
 
-# Keep base API endpoints in one place for maintainability.
+# Keep API endpoints centralized for clean maintenance.
 GITHUB_API = "https://api.github.com"
+GITHUB_GRAPHQL = "https://api.github.com/graphql"
 
 
 @dataclass
 class StreakStats:
-    """Container for all summary values displayed in the card."""
+    """Container for values displayed in the streak SVG card."""
 
     total_contributions: int
     current_streak: int
@@ -33,7 +34,7 @@ class StreakStats:
 
 
 def build_headers(token: str | None) -> Dict[str, str]:
-    """Build consistent headers for GitHub API requests."""
+    """Build stable request headers."""
 
     headers = {
         "Accept": "application/vnd.github+json",
@@ -45,7 +46,7 @@ def build_headers(token: str | None) -> Dict[str, str]:
 
 
 def parse_next_url(link_header: str | None) -> str | None:
-    """Extract rel=next URL from GitHub Link header."""
+    """Extract rel=next link from GitHub Link header."""
 
     if not link_header:
         return None
@@ -54,50 +55,131 @@ def parse_next_url(link_header: str | None) -> str | None:
         part = chunk.strip()
         if 'rel="next"' not in part:
             continue
-
         start = part.find("<")
         end = part.find(">")
         if start != -1 and end != -1 and end > start:
             return part[start + 1 : end]
-
     return None
 
 
-def page_oldest_timestamp(events: List[dict]) -> dt.datetime | None:
-    """Return the oldest event timestamp in one page payload."""
+def github_get_json(url: str, token: str | None) -> dict | list:
+    """GET JSON helper with normalized error handling."""
 
-    oldest: dt.datetime | None = None
-
-    for event in events:
-        created_at = event.get("created_at")
-        if not created_at:
-            continue
-        candidate = dt.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        if oldest is None or candidate < oldest:
-            oldest = candidate
-
-    return oldest
+    request = urllib.request.Request(url, headers=build_headers(token))
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        msg = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"GitHub API error {exc.code}: {msg}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Network error: {exc}") from exc
 
 
-def fetch_events(
+def github_graphql(query: str, variables: dict, token: str | None) -> dict:
+    """POST GraphQL helper for historical contribution calendar."""
+
+    body = json.dumps({"query": query, "variables": variables}).encode("utf-8")
+    headers = build_headers(token)
+    headers["Content-Type"] = "application/json"
+
+    request = urllib.request.Request(GITHUB_GRAPHQL, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        msg = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"GitHub GraphQL error {exc.code}: {msg}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Network error: {exc}") from exc
+
+    if payload.get("errors"):
+        raise RuntimeError(f"GitHub GraphQL returned errors: {payload['errors']}")
+
+    return payload.get("data", {})
+
+
+def fetch_user_created_date(username: str, token: str | None) -> dt.date:
+    """Get user account creation date (start bound for full history)."""
+
+    payload = github_get_json(f"{GITHUB_API}/users/{username}", token)
+    created_at = payload.get("created_at")
+    if not created_at:
+        raise RuntimeError("Unable to read user.created_at from GitHub API")
+    return dt.datetime.fromisoformat(created_at.replace("Z", "+00:00")).date()
+
+
+def fetch_historical_contribution_days(
+    username: str,
+    token: str | None,
+    start_date: dt.date,
+    end_date: dt.date,
+) -> Dict[dt.date, int]:
+    """Fetch contribution days from account creation date until today (yearly chunks)."""
+
+    # GraphQL contributionCollection works best in <= 1-year windows.
+    query = """
+    query($login: String!, $from: DateTime!, $to: DateTime!) {
+      user(login: $login) {
+        contributionsCollection(from: $from, to: $to) {
+          contributionCalendar {
+            weeks {
+              contributionDays {
+                date
+                contributionCount
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    contributions_by_day: Dict[dt.date, int] = {}
+    cursor = start_date
+
+    while cursor <= end_date:
+        chunk_end = min(cursor + dt.timedelta(days=364), end_date)
+        variables = {
+            "login": username,
+            "from": f"{cursor.isoformat()}T00:00:00Z",
+            "to": f"{chunk_end.isoformat()}T23:59:59Z",
+        }
+        data = github_graphql(query, variables, token)
+
+        user = data.get("user") or {}
+        collection = user.get("contributionsCollection") or {}
+        calendar = collection.get("contributionCalendar") or {}
+        weeks = calendar.get("weeks") or []
+
+        for week in weeks:
+            for day in week.get("contributionDays", []):
+                day_date = dt.date.fromisoformat(day["date"])
+                count = int(day.get("contributionCount", 0))
+                contributions_by_day[day_date] = contributions_by_day.get(day_date, 0) + count
+
+        cursor = chunk_end + dt.timedelta(days=1)
+
+    return contributions_by_day
+
+
+def fetch_recent_push_events(
     username: str,
     token: str | None,
     max_pages: int = 5,
-    lookback_days: int = 120,
+    lookback_days: int = 45,
 ) -> List[dict]:
-    """Fetch public events with safe pagination and early-stop heuristics."""
+    """Fetch recent public events to capture latest push commits quickly."""
 
-    # Keep loops bounded for speed and API friendliness.
     max_pages = max(1, min(max_pages, 10))
     lookback_days = max(1, lookback_days)
 
-    # We only need a bounded history window for streak calculations.
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=lookback_days)
+    params = urllib.parse.urlencode({"per_page": 100})
+    next_url: str | None = f"{GITHUB_API}/users/{username}/events/public?{params}"
 
     events: List[dict] = []
     page_count = 0
-    params = urllib.parse.urlencode({"per_page": 100})
-    next_url: str | None = f"{GITHUB_API}/users/{username}/events/public?{params}"
 
     while next_url and page_count < max_pages:
         request = urllib.request.Request(next_url, headers=build_headers(token))
@@ -108,15 +190,9 @@ def fetch_events(
                 link_header = response.headers.get("Link")
         except urllib.error.HTTPError as exc:
             msg = exc.read().decode("utf-8", errors="ignore")
-
-            # GitHub can return 422 when endpoint pagination depth is exceeded.
+            # Gracefully stop when pagination boundary is reached.
             if exc.code == 422 and "pagination is limited" in msg.lower():
                 break
-
-            # Provide actionable error for token/rate limit issues.
-            if exc.code in (401, 403):
-                raise RuntimeError(f"GitHub API auth/rate-limit error {exc.code}: {msg}") from exc
-
             raise RuntimeError(f"GitHub API error {exc.code}: {msg}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Network error: {exc}") from exc
@@ -128,58 +204,72 @@ def fetch_events(
         events.extend(payload)
         next_url = parse_next_url(link_header)
 
-        # Stop early when this page is already older than lookback window.
-        oldest_in_page = page_oldest_timestamp(payload)
-        if oldest_in_page and oldest_in_page < cutoff:
+        oldest = None
+        for event in payload:
+            created_at = event.get("created_at")
+            if not created_at:
+                continue
+            ts = dt.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            oldest = ts if oldest is None else min(oldest, ts)
+        if oldest and oldest < cutoff:
             break
 
     return events
 
 
-def aggregate_commit_days(events: Iterable[dict], timezone: dt.timezone) -> Dict[dt.date, int]:
-    """Aggregate pushed commit counts by local calendar day."""
+def aggregate_push_commits_by_day(events: Iterable[dict], timezone: dt.timezone) -> Dict[dt.date, int]:
+    """Aggregate commit counts from PushEvent payloads by local date."""
 
-    contributions_by_day: Dict[dt.date, int] = {}
+    push_counts: Dict[dt.date, int] = {}
 
     for event in events:
-        # Count only commits from push events (commit-log aligned behavior).
         if event.get("type") != "PushEvent":
             continue
-
-        # Sum commits from payload, ignore empty pushes.
         commit_count = len(event.get("payload", {}).get("commits", []))
         if commit_count <= 0:
             continue
-
-        # Convert UTC event timestamp into configured local date.
         created_at = event.get("created_at")
         if not created_at:
             continue
-
         timestamp = dt.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
         local_day = timestamp.astimezone(timezone).date()
-        contributions_by_day[local_day] = contributions_by_day.get(local_day, 0) + commit_count
+        push_counts[local_day] = push_counts.get(local_day, 0) + commit_count
 
-    return contributions_by_day
+    return push_counts
+
+
+def merge_historical_with_recent(
+    historical_days: Dict[dt.date, int],
+    recent_push_days: Dict[dt.date, int],
+) -> Dict[dt.date, int]:
+    """Merge stable history with recent push signals for fresher same-day updates."""
+
+    merged = dict(historical_days)
+
+    # We only patch using max() to avoid over-counting on delayed calendar refreshes.
+    for day, push_count in recent_push_days.items():
+        merged[day] = max(merged.get(day, 0), push_count)
+
+    return merged
 
 
 def compute_streaks(contributions_by_day: Dict[dt.date, int], today: dt.date) -> StreakStats:
-    """Compute total, current streak, longest streak and date spans."""
+    """Compute total, current streak, and longest streak from daily contributions."""
 
-    if not contributions_by_day:
+    active_days = sorted(day for day, count in contributions_by_day.items() if count > 0)
+    if not active_days:
         return StreakStats(0, 0, 0, None, None, None, None)
 
-    sorted_days = sorted(contributions_by_day.keys())
-    total_contributions = sum(contributions_by_day.values())
+    total_contributions = sum(count for count in contributions_by_day.values() if count > 0)
 
     longest_len = 1
-    longest_start = sorted_days[0]
-    longest_end = sorted_days[0]
+    longest_start = active_days[0]
+    longest_end = active_days[0]
 
-    run_start = sorted_days[0]
-    prev = sorted_days[0]
+    run_start = active_days[0]
+    prev = active_days[0]
 
-    for day in sorted_days[1:]:
+    for day in active_days[1:]:
         if (day - prev).days == 1:
             prev = day
             continue
@@ -193,15 +283,13 @@ def compute_streaks(contributions_by_day: Dict[dt.date, int], today: dt.date) ->
         run_start = day
         prev = day
 
-    # Evaluate the final run after the loop.
     run_len = (prev - run_start).days + 1
     if run_len > longest_len:
         longest_len = run_len
         longest_start = run_start
         longest_end = prev
 
-    # Current streak is active only if latest contribution is today or yesterday.
-    latest = sorted_days[-1]
+    latest = active_days[-1]
     if (today - latest).days > 1:
         current_len = 0
         current_start = None
@@ -209,7 +297,8 @@ def compute_streaks(contributions_by_day: Dict[dt.date, int], today: dt.date) ->
     else:
         current_end = latest
         current_start = latest
-        while current_start - dt.timedelta(days=1) in contributions_by_day:
+        active_set = set(active_days)
+        while current_start - dt.timedelta(days=1) in active_set:
             current_start -= dt.timedelta(days=1)
         current_len = (current_end - current_start).days + 1
 
@@ -225,19 +314,19 @@ def compute_streaks(contributions_by_day: Dict[dt.date, int], today: dt.date) ->
 
 
 def day_fmt(day: dt.date) -> str:
-    """Platform-safe day formatting (Linux/macOS/Windows)."""
+    """Platform-safe long date label."""
 
     return day.strftime("%b %-d, %Y") if os.name != "nt" else day.strftime("%b %d, %Y")
 
 
 def short_day_fmt(day: dt.date) -> str:
-    """Platform-safe short day formatting used in same-year ranges."""
+    """Platform-safe short date label."""
 
     return day.strftime("%b %-d") if os.name != "nt" else day.strftime("%b %d")
 
 
 def format_range(start: dt.date | None, end: dt.date | None) -> str:
-    """Render compact date ranges for card labels."""
+    """Render compact card range labels."""
 
     if not start or not end:
         return "No active streak"
@@ -249,7 +338,7 @@ def format_range(start: dt.date | None, end: dt.date | None) -> str:
 
 
 def render_svg(username: str, stats: StreakStats) -> str:
-    """Create a compact SVG with three streak metrics."""
+    """Build the final SVG card."""
 
     return f"""<svg width=\"900\" height=\"220\" viewBox=\"0 0 900 220\" xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" aria-label=\"GitHub streak stats\">
   <defs>
@@ -265,7 +354,7 @@ def render_svg(username: str, stats: StreakStats) -> str:
   <line x1=\"600\" y1=\"55\" x2=\"600\" y2=\"195\" stroke=\"#30363d\"/>
 
   <text x=\"150\" y=\"98\" text-anchor=\"middle\" font-family=\"Segoe UI, Ubuntu, sans-serif\" font-weight=\"700\" font-size=\"52\" fill=\"#c9d1d9\">{stats.total_contributions}</text>
-  <text x=\"150\" y=\"135\" text-anchor=\"middle\" font-family=\"Segoe UI, Ubuntu, sans-serif\" font-size=\"28\" fill=\"#8b949e\">Total Commits</text>
+  <text x=\"150\" y=\"135\" text-anchor=\"middle\" font-family=\"Segoe UI, Ubuntu, sans-serif\" font-size=\"28\" fill=\"#8b949e\">Total Daily Contributions</text>
 
   <text x=\"450\" y=\"88\" text-anchor=\"middle\" font-family=\"Segoe UI Emoji, Segoe UI Symbol\" font-size=\"34\" fill=\"#ffa657\">🔥</text>
   <text x=\"450\" y=\"118\" text-anchor=\"middle\" font-family=\"Segoe UI, Ubuntu, sans-serif\" font-weight=\"700\" font-size=\"54\" fill=\"#ffa657\">{stats.current_streak}</text>
@@ -280,40 +369,55 @@ def render_svg(username: str, stats: StreakStats) -> str:
 
 
 def parse_timezone(offset_hours: int) -> dt.timezone:
-    """Create timezone from integer UTC offset for deterministic local-day math."""
+    """Create timezone from integer UTC offset."""
 
     return dt.timezone(dt.timedelta(hours=offset_hours))
 
 
 def main() -> int:
-    """CLI entrypoint for local runs and GitHub Actions."""
+    """CLI entrypoint for local use and GitHub Actions."""
 
     parser = argparse.ArgumentParser(description="Generate GitHub daily streak SVG")
     parser.add_argument("--username", required=True, help="GitHub username")
     parser.add_argument("--token", default=os.getenv("GITHUB_TOKEN"), help="GitHub API token")
     parser.add_argument("--timezone-offset", type=int, default=0, help="UTC offset in hours")
-    parser.add_argument("--max-pages", type=int, default=5, help="Max API pages to fetch (1-10)")
-    parser.add_argument("--lookback-days", type=int, default=120, help="History window in days")
+    parser.add_argument("--max-pages", type=int, default=5, help="Max event pages for recent pushes (1-10)")
+    parser.add_argument("--lookback-days", type=int, default=45, help="Recent event lookback window")
     parser.add_argument("--output", default="assets/github-streak.svg", help="Output SVG path")
-    parser.add_argument("--events-file", help="Optional local JSON file for offline testing")
+    parser.add_argument("--events-file", help="Optional local JSON events file (offline testing mode)")
     args = parser.parse_args()
 
     timezone = parse_timezone(args.timezone_offset)
+    today = dt.datetime.now(timezone).date()
 
+    # Offline mode uses only fixture push events.
     if args.events_file:
         with open(args.events_file, "r", encoding="utf-8") as fh:
             events = json.load(fh)
+        historical_days: Dict[dt.date, int] = {}
+        recent_push_days = aggregate_push_commits_by_day(events, timezone)
+        merged_days = merge_historical_with_recent(historical_days, recent_push_days)
     else:
-        events = fetch_events(
+        # Online mode starts from account creation date for full-history streak baseline.
+        profile_created = fetch_user_created_date(args.username, args.token)
+        historical_days = fetch_historical_contribution_days(
+            username=args.username,
+            token=args.token,
+            start_date=profile_created,
+            end_date=today,
+        )
+
+        # Overlay recent pushes so streak can update faster for newest activity.
+        recent_events = fetch_recent_push_events(
             username=args.username,
             token=args.token,
             max_pages=args.max_pages,
             lookback_days=args.lookback_days,
         )
+        recent_push_days = aggregate_push_commits_by_day(recent_events, timezone)
+        merged_days = merge_historical_with_recent(historical_days, recent_push_days)
 
-    contributions_by_day = aggregate_commit_days(events, timezone)
-    today = dt.datetime.now(timezone).date()
-    stats = compute_streaks(contributions_by_day, today)
+    stats = compute_streaks(merged_days, today)
 
     svg = render_svg(args.username, stats)
     out_path = os.path.abspath(args.output)
@@ -328,7 +432,7 @@ def main() -> int:
                 "total_contributions": stats.total_contributions,
                 "current_streak": stats.current_streak,
                 "longest_streak": stats.longest_streak,
-                "days_with_commits": len(contributions_by_day),
+                "days_with_contributions": len([d for d, v in merged_days.items() if v > 0]),
                 "output": args.output,
             },
             indent=2,
