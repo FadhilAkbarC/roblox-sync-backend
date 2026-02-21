@@ -1,0 +1,54 @@
+name: Update Daily Streak Card
+
+on:
+  schedule:
+    - cron: "15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate streak SVG
+        env:
+          STREAK_USERNAME: ${{ vars.STREAK_USERNAME }}
+          STREAK_TIMEZONE_OFFSET: ${{ vars.STREAK_TIMEZONE_OFFSET }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fail fast if username is not configured in repo variables.
+          if [ -z "$STREAK_USERNAME" ]; then
+            echo "Missing repository variable: STREAK_USERNAME"
+            exit 1
+          fi
+
+          # Render the SVG card from commit push events.
+          python3 src/dailystreaks.py \
+            --username "$STREAK_USERNAME" \
+            --timezone-offset "${STREAK_TIMEZONE_OFFSET:-0}" \
+            --output assets/github-streak.svg
+
+      - name: Commit changes
+        run: |
+          # Commit only when card content actually changed.
+          if git diff --quiet assets/github-streak.svg; then
+            echo "No changes detected"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/github-streak.svg
+          git commit -m "chore: update DailyStreaks card"
+          git push
