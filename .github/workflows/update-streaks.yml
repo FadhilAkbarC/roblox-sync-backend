@@ -35,13 +35,11 @@ jobs:
           STREAK_LOOKBACK_DAYS: ${{ vars.STREAK_LOOKBACK_DAYS }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Stop early when username variable is missing.
           if [ -z "$STREAK_USERNAME" ]; then
             echo "Missing repository variable: STREAK_USERNAME"
             exit 1
           fi
 
-          # Generate fresh SVG from historical + recent activity.
           python3 src/dailystreaks.py \
             --username "$STREAK_USERNAME" \
             --timezone-offset "${STREAK_TIMEZONE_OFFSET:-0}" \
@@ -51,7 +49,6 @@ jobs:
 
       - name: Commit changes
         run: |
-          # Commit only when card content actually changes.
           if git diff --quiet assets/github-streak.svg; then
             echo "No changes detected"
             exit 0
