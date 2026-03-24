@@ -1,10 +1,11 @@
-# DailyStreaks
+# DailyStreaks (`daily_streak`)
 
 Generate an auto-updating GitHub streak SVG card for your profile README.
 
 - Uses full contribution history (GraphQL) + recent push events (REST) for faster same-day updates.
 - Output file: `assets/github-streak.svg`.
 - Auto-update workflow: `.github/workflows/update-streaks.yml`.
+- Repository path: `futurisme/daily_streak` (use this exact path in raw image URLs).
 
 ## Quick setup (start to finish)
 
@@ -56,3 +57,5 @@ Offline mode with sample events:
 ```bash
 python3 src/dailystreaks.py --username demo --events-file examples/sample_events.json --output assets/github-streak.svg
 ```
+
+Sample fixture dates are refreshed to **March 24, 2026**.
